@@ -6,6 +6,6 @@ with import nixpkgs {};
 
 pkgs.mkShell {
   nativeBuildInputs = [
-    yarn
+    nodejs
   ];
 }
