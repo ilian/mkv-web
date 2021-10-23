@@ -1,11 +1,13 @@
-import MKV from './mkv';
+import ChunkedRemuxer from './chunked-remuxer';
 
 const filePicker = document.getElementById("file") as HTMLInputElement;
 
-function loadMedia() {
+async function loadMedia() {
   if (filePicker.files && filePicker.files[0]) {
-    const mkv = new MKV(filePicker.files[0]);
-    const meta = mkv.getMetadata();
+    console.log("loadMedia");
+    const remuxer = new ChunkedRemuxer(filePicker.files[0]);
+    const meta = await remuxer.getMetadata();
+    alert(meta);
     //const videoChunk = mkv.getVideoChunk(filePicker.files[0], 0.0);
   }
 }

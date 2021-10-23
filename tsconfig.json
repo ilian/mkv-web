@@ -1,9 +1,12 @@
 {
   "compilerOptions": {
     "sourceMap": true,
+    "moduleResolution": "node",
+    "module": "es2020",
     "lib": [
-      "es2018",
-      "dom"
+      "es2020",
+      "dom",
+      "webworker"
     ]
   }
 }

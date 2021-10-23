@@ -1,12 +1,19 @@
-var path = require("path");
+const path = require("path");
+const CopyPlugin = require("copy-webpack-plugin");
 
 module.exports = {
   resolve: {
-    extensions: ['.ts', '.js']
+    extensions: ['.ts', '.js'],
+    fallback: {
+      "path": require.resolve("path-browserify")
+    }
   },
-  entry: "./src/index.ts",
+  entry: {
+    bundle: "./src/index.ts",
+    //worker: "./src/chunked-remuxer-worker.ts"
+  },
   output: {
-    filename: "bundle.js",
+    filename: "[name].js",
     path: path.resolve(__dirname, "dist"),
     publicPath: "/dist/"
   },
@@ -17,12 +24,21 @@ module.exports = {
         use: [{
           loader: "ts-loader"
         }],
-        exclude: /node_modules/,
+        exclude: /node_modules/
+      },
+      {
+        test: /src\/worker\/ffmpeg-core\//,
+        type: 'asset/resource'
       }
     ]
   },
   devtool: "source-map",
   devServer: {
+    // Allow use of SharedArrayBuffer, needed by emscripten threads
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp'
+    },
     static: {
       directory: path.join(__dirname, "public"),
     },

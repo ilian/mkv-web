@@ -7,5 +7,11 @@ with import nixpkgs {};
 pkgs.mkShell {
   nativeBuildInputs = [
     nodejs
+    emscripten
+    autoconf
+    automake
+    libtool
+    pkgconfig
+    ragel
   ];
 }
