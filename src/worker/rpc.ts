@@ -1,5 +1,10 @@
+import { MediaMetadata } from './ffmpeg';
+// Shared IPC interface
+// TODO: Avoid Promise<T> on server impl when it's not needed
 export interface IChunkedRemuxerWorkerRPC {
-  getMetadata(): Promise<string>;
+  load(): Promise<void>;
+  setInputFile(file: File): Promise<void>;
+  getMetadata(): Promise<MediaMetadata>;
 }
 
 /*
@@ -68,8 +73,16 @@ export class ChunkedRemuxWorkerRPCClient implements IChunkedRemuxerWorkerRPC {
     });
   }
 
+  // TODO: Avoid having to create dummy functions for stub generation
   @clientMethod
-  getMetadata(): Promise<string> {return null;}
+  getMetadata(): Promise<MediaMetadata> { return null; }
+
+  @clientMethod
+  setInputFile(file: File): Promise<void> { return null; }
+
+  @clientMethod
+  load(): Promise<void> { return null; }
+
 }
 
 // -- WORKER --
@@ -92,7 +105,7 @@ export class ChunkedRemuxWorkerRPCServer {
         if (payload.method in serverMethods) {
           let rpcResult: RPCResult;
           try {
-            const callReturnValue = await serverMethods[payload.method](...payload.args);
+            const callReturnValue = await serverMethods[payload.method].apply(target, payload.args);
             rpcResult = {
               tag: "ok",
               value: callReturnValue

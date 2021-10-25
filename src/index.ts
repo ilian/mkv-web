@@ -4,7 +4,6 @@ const filePicker = document.getElementById("file") as HTMLInputElement;
 
 async function loadMedia() {
   if (filePicker.files && filePicker.files[0]) {
-    console.log("loadMedia");
     const remuxer = new ChunkedRemuxer(filePicker.files[0]);
     const meta = await remuxer.getMetadata();
     alert(meta);

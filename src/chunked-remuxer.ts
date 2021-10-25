@@ -10,7 +10,9 @@ export default class ChunkedRemuxer {
     this.rpcClient = new ChunkedRemuxWorkerRPCClient(this.worker);
   }
 
-  getMetadata(): Promise<String> {
-    return this.rpcClient.getMetadata();
+  async getMetadata(): Promise<String> {
+    await this.rpcClient.load();
+    await this.rpcClient.setInputFile(this.file);
+    return JSON.stringify(await this.rpcClient.getMetadata());
   }
 }
