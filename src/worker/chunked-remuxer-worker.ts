@@ -1,3 +1,4 @@
 import FFmpeg from './ffmpeg';
+import * as Comlink from 'comlink';
 
-new FFmpeg();
+Comlink.expose(new FFmpeg());

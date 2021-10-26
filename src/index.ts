@@ -1,12 +1,14 @@
-import ChunkedRemuxer from './chunked-remuxer';
+import spawnFFmpegWorker from './chunked-remuxer';
 
 const filePicker = document.getElementById("file") as HTMLInputElement;
 
 async function loadMedia() {
   if (filePicker.files && filePicker.files[0]) {
-    const remuxer = new ChunkedRemuxer(filePicker.files[0]);
-    const meta = await remuxer.getMetadata();
-    alert(meta);
+    const ffmpeg = spawnFFmpegWorker();
+    await ffmpeg.load();
+    await ffmpeg.setInputFile(filePicker.files[0]);
+    const meta = await ffmpeg.getMetadata();
+    alert(JSON.stringify(meta));
     //const videoChunk = mkv.getVideoChunk(filePicker.files[0], 0.0);
   }
 }

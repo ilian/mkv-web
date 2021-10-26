@@ -19,6 +19,7 @@
     "webpack-dev-server": "^4.3.0"
   },
   "dependencies": {
+    "comlink": "^4.3.1",
     "rxjs": "^7.4.0"
   }
 }

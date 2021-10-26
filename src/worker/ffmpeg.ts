@@ -3,7 +3,6 @@ import FFMpegCore  from './ffmpeg-core/ffmpeg-core.js';
 import FFMpegWasm   from './ffmpeg-core/ffmpeg-core.wasm';
 import FFMpegWorker from './ffmpeg-core/ffmpeg-core.js';
 import * as path from 'path-browserify';
-import { IChunkedRemuxerWorkerRPC, serverMethod, ChunkedRemuxWorkerRPCServer } from './rpc';
 import { Observable, fromEventPattern, firstValueFrom } from 'rxjs';
 import { takeWhile, toArray } from 'rxjs/operators';
 
@@ -22,7 +21,7 @@ export interface MediaMetadata {
   durationSeconds: number
 }
 
-export default class FFmpeg implements IChunkedRemuxerWorkerRPC {
+export default class FFmpeg {
   private defaultArgs = [
     "ffmpeg",
     "-hide_banner", // Hide copyright notice, build options and library versions
@@ -35,8 +34,6 @@ export default class FFmpeg implements IChunkedRemuxerWorkerRPC {
   private inputPath: string;
   private outputPath = "/output/out.mp4";
   private ffmpegState = FFmpegState.Uninitialized;
-  // TODO: Decorator?
-  private rpcServer = new ChunkedRemuxWorkerRPCServer(this);
 
   constructor() {
 
@@ -54,13 +51,9 @@ export default class FFmpeg implements IChunkedRemuxerWorkerRPC {
     }
   }
 
-  @serverMethod
-  async load(): Promise<void> {
+  async load() {
     this.assertState(FFmpegState.Uninitialized);
     this.ffmpegState = FFmpegState.Initializing;
-    this.ffmpegLogObservable = new Observable(subscriber => {
-
-    });
 
     type LogCallback = (line: string) => void;
     const handlers: LogCallback[] = [];
@@ -108,8 +101,7 @@ export default class FFmpeg implements IChunkedRemuxerWorkerRPC {
     this.ffmpegState = FFmpegState.Idle;
   }
 
-  @serverMethod
-  async setInputFile(file: File): Promise<void> {
+  async setInputFile(file: File) {
     this.assertState(FFmpegState.Idle);
     const FS = this.ffmpegCore.FS;
     const WORKERFS = this.ffmpegCore.FS_filesystems.WORKERFS;
@@ -121,7 +113,6 @@ export default class FFmpeg implements IChunkedRemuxerWorkerRPC {
     FS.mkdir(path.dirname(this.outputPath));
   }
 
-  @serverMethod
   async getMetadata(): Promise<MediaMetadata> {
     this.assertInput();
     const logEntriesPromise: Promise<string[]> = firstValueFrom(
