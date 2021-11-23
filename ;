@@ -94,8 +94,8 @@ async function loadMedia() {
     sourceBuffer.onupdateend = () => {
       console.log("UPDATEEND");
     }
-    sourceBuffer.onerror = e => {
-      console.log("ERR", e);
+    sourceBuffer.onerror = ()=> {
+      console.log("ERR");
     }
     video.oncanplay = () => {
       console.log("CANPLAY");

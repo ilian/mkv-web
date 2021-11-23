@@ -108,7 +108,7 @@ export default class FFmpeg {
 
     const inputDir = "/input";
     FS.mkdir(inputDir);
-    this.ffmpegCore.FS_mount(WORKERFS, { files: [file] }, "/input");
+    this.ffmpegCore.FS_mount(WORKERFS, { files: [file] }, inputDir);
     this.inputPath = path.join(inputDir, file.name);
     FS.mkdir(path.dirname(this.outputPath));
   }
@@ -137,7 +137,7 @@ export default class FFmpeg {
     return metadata;
   }
 
-  async remuxChunkToCompatibleFormat(seekOffsetSeconds = 0.0, durationSeconds: number) {
+  async remuxChunk(seekOffsetSeconds = 0.0, durationSeconds: number) {
     this.assertInput();
     // TODO: Get video codec and check if supported by browser and mp4 container
     var args = [
@@ -145,20 +145,32 @@ export default class FFmpeg {
       "-i", this.inputPath, // Input file
       ...(typeof durationSeconds === "undefined" ? [] : ["-t", durationSeconds.toString()]), // Duration of chunk
       "-c", "copy", // Do not re-encode
+      /*
+       * Fragment MP4 files, required for MSE (frag_keyframe, empty_moov)
+       * Avoid 'TFHD base-data-offset not allowed by MSE.' error for Chrome (default_base_moof)
+       */
+      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+      "-an", // Remove audio
+      "-sn",
+      "-map_chapters", "-1", // Don't copy chapters metadata, which can cause problems with MIME type containing 'text' codec
       this.outputPath
     ];
     this.runFFmpeg(...args);
+    const FS = this.ffmpegCore.FS;
+    const blob: Uint8Array = FS.readFile(this.outputPath);
+    return blob;
   }
 
   private runFFmpeg(...args: string[]) {
     this.assertState(FFmpegState.Idle);
 
-    // parse_args from utils.js of ffmpeg.wasm-core
+    // parse_args based of utils.js of ffmpeg.wasm-core, but modified to handle UTF-8 paths
     const parse_args = (Core, _args: string[]) => {
       const _argsPtr = Core._malloc(_args.length * Uint32Array.BYTES_PER_ELEMENT);
       _args.forEach((s, idx) => {
-        const buf = Core._malloc(s.length + 1);
-        Core.writeAsciiToMemory(s, buf);
+        const bufSize = Core.lengthBytesUTF8(s) + 1;
+        const buf = Core._malloc(bufSize);
+        Core.stringToUTF8(s, buf, bufSize);
         Core.setValue(_argsPtr + (Uint32Array.BYTES_PER_ELEMENT * idx), buf, 'i32');
       });
       return [_args.length, _argsPtr];
