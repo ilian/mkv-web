@@ -75,28 +75,31 @@ async function loadMedia() {
 
     await waitOpenState();
     mediaSource.duration = duration;
-    const videoChunk = await ffmpeg.remuxChunk(0.0, 30.0);
-    console.log("Received video chunk", videoChunk);
+    const remuxedChunk = await ffmpeg.remuxChunk(0.0, 30.0);
     // https://developer.mozilla.org/en-US/docs/Web/Media/Formats/codecs_parameter
-    var mime = await getMP4Mime(videoChunk);
     // Just add something that can be played by Firefox, since the type check is too conservative
-    mime = 'video/mp4; codecs="avc1.640033"';
-    console.log("Mime of video: " + mime);
-    // downloadBlob(videoChunk, "test.mp4", "video/mp4");
-    if (!MediaSource.isTypeSupported(mime)) {
-      console.error(`Mime type '${mime}' is not supported`);
-    }
-    const sourceBuffer = mediaSource.addSourceBuffer(mime);
-    sourceBuffer.appendBuffer(videoChunk);
-    sourceBuffer.onupdatestart = () => {
-      console.log("UPDATESTART");
+
+    const videoBuffer = mediaSource.addSourceBuffer(remuxedChunk.videoChunk.mime);
+    const audioBuffer = mediaSource.addSourceBuffer(remuxedChunk.audioChunk.mime);
+
+    const addChunk = (sourceBuffer: SourceBuffer, data: Uint8Array) => {
+      sourceBuffer.appendBuffer(data);
+      sourceBuffer.onupdatestart = () => {
+        console.log("UPDATESTART");
+      };
+      sourceBuffer.onupdateend = () => {
+        console.log("UPDATEEND");
+      }
+      sourceBuffer.onerror = e => {
+        console.log("ERR", e);
+      }
     };
-    sourceBuffer.onupdateend = () => {
-      console.log("UPDATEEND");
-    }
-    sourceBuffer.onerror = e => {
-      console.log("ERR", e);
-    }
+
+    downloadBlob(remuxedChunk.audioChunk.data, "audio", remuxedChunk.audioChunk.mime);
+    downloadBlob(remuxedChunk.videoChunk.data, "video", remuxedChunk.videoChunk.mime);
+    addChunk(audioBuffer, remuxedChunk.audioChunk.data);
+    addChunk(videoBuffer, remuxedChunk.videoChunk.data);
+
     video.oncanplay = () => {
       console.log("CANPLAY");
       video.play();

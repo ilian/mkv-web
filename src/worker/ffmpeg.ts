@@ -1,5 +1,5 @@
 /// <reference path="./index.d.ts" />
-import FFMpegCore  from './ffmpeg-core/ffmpeg-core.js';
+import FFMpegCore   from './ffmpeg-core/ffmpeg-core.js';
 import FFMpegWasm   from './ffmpeg-core/ffmpeg-core.wasm';
 import FFMpegWorker from './ffmpeg-core/ffmpeg-core.js';
 import * as path from 'path-browserify';
@@ -17,22 +17,77 @@ enum FFmpegState {
   Busy
 }
 
+interface Stream {
+  id: string
+  lang?: string
+  /** Long format description of a stream e.g. 'h264 (High 10), yuv420p10le(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 23.98 fps, 23.98 tbr, 1k tbn, 47.95 tbc (default)' **/
+  formatDescription?: string
+}
+
 export interface MediaMetadata {
   durationSeconds: number
+  audioStreams: Stream[]
+  videoStreams: Stream[]
+}
+
+interface ContainerType {
+  /** FFMpeg format code of container as listed by 'ffmpeg -formats' **/
+  ffmpegFormat: string
+  /** MIME type of container for SourceBuffer of a MediaSource  **/
+  mime: string
+}
+
+export interface RemuxedChunkStream {
+  data: Uint8Array
+  mime: string
+}
+
+interface RemuxedChunk {
+  videoChunk: RemuxedChunkStream,
+  audioChunk: RemuxedChunkStream
+}
+
+function ffmpegFormatToCompatibleContainer(format: string): ContainerType {
+  if (format.startsWith("h264")) {
+    return {
+      ffmpegFormat: "mp4",
+      mime: 'video/mp4; codecs="avc1.640033' // AVC High Level 5.1
+    };
+  } else if (format.startsWith("flac")) {
+    return {
+      ffmpegFormat: "mp4",
+      mime: 'audio/mp4; codecs="flac"'
+    };
+  } else if (format.startsWith("vorbis")) {
+    return {
+      ffmpegFormat: "webm",
+      mime: 'audio/webm; codecs="vorbis"'
+    };
+  } else if (format.startsWith("aac")) {
+    return {
+      ffmpegFormat: "mp4",
+      mime: 'audio/mp4; codecs="mp4a.40.2"' // AAC-LC
+    }
+  }
+  throw new Error("Unsupported ffmpeg format description: " + format);
 }
 
 export default class FFmpeg {
-  private defaultArgs = [
+  static defaultArgs = [
     "ffmpeg",
     "-hide_banner", // Hide copyright notice, build options and library versions
     "-nostdin", // Non-interactive mode
   ];
 
+  static streamRegex = /\s*Stream #(?<id>\d+:\d+)\(?(?<lang>.*?)\)?: (?<type>\w+): (?<formatDescription>.*)/;
+  static durationRegex = /Duration: (\d+?):(\d{2}):(.+?),/;
+
   private ffmpegCore: any;
   private ffmpegMain: any;
   private ffmpegLogObservable: Observable<string>;
   private inputPath: string;
-  private outputPath = "/output/out.mp4";
+  private inputMetadata: MediaMetadata;
+  private outputDir = "/output";
   private ffmpegState = FFmpegState.Uninitialized;
 
   constructor() {
@@ -110,11 +165,10 @@ export default class FFmpeg {
     FS.mkdir(inputDir);
     this.ffmpegCore.FS_mount(WORKERFS, { files: [file] }, inputDir);
     this.inputPath = path.join(inputDir, file.name);
-    FS.mkdir(path.dirname(this.outputPath));
-  }
+    FS.mkdir(this.outputDir);
 
-  async getMetadata(): Promise<MediaMetadata> {
-    this.assertInput();
+    /* Get metadata by invoking ffmpeg -i */
+
     const logEntriesPromise: Promise<string[]> = firstValueFrom(
       this.ffmpegLogObservable.pipe(
         takeWhile(line => line !== "FFMPEG_END"),
@@ -122,43 +176,124 @@ export default class FFmpeg {
       )
     );
     this.runFFmpeg("-i", this.inputPath);
+    this.runFFmpeg("-formats");
     const logEntries = await logEntriesPromise;
 
-    let metadata: MediaMetadata = {
-      durationSeconds: undefined
+    this.inputMetadata = {
+      durationSeconds: undefined,
+      audioStreams: [],
+      videoStreams: []
     };
-    const durationRegex = /Duration: (\d+?):(\d{2}):(.+?),/;
     for (const line of logEntries) {
-      const match = line.match(durationRegex);
-      if (match) {
-        metadata.durationSeconds = parseFloat(match[3]) + 60 * parseInt(match[2]) + 60 * 60 * parseInt(match[1]);
+      const durationMatch = line.match(FFmpeg.durationRegex);
+      if (durationMatch) {
+        this.inputMetadata.durationSeconds = parseFloat(durationMatch[3]) + 60 * parseInt(durationMatch[2]) + 60 * 60 * parseInt(durationMatch[1]);
+      }
+
+      const streamMatch = FFmpeg.streamRegex.exec(line);
+      if (streamMatch) {
+        const { id, lang, type, formatDescription } = streamMatch.groups;
+        const stream: Stream = {
+          id,
+          lang,
+          formatDescription
+        };
+        switch (type) {
+          case "Audio":
+            this.inputMetadata.audioStreams.push(stream);
+          break;
+          case "Video":
+            this.inputMetadata.videoStreams.push(stream);
+          break;
+          default:
+            console.warn("Ignoring non-audio/video stream", stream);
+        }
       }
     }
-    return metadata;
+    console.log(this.inputMetadata);
   }
 
-  async remuxChunk(seekOffsetSeconds = 0.0, durationSeconds: number) {
+  async getMetadata(): Promise<MediaMetadata> {
+    this.assertInput();
+    return this.inputMetadata;
+  }
+
+  async remuxChunk(seekOffsetSeconds = 0.0, durationSeconds?: number, videoStreamId?: string, audioStreamId?: string): Promise<RemuxedChunk> {
     this.assertInput();
     // TODO: Get video codec and check if supported by browser and mp4 container
-    var args = [
-      "-ss", seekOffsetSeconds.toString(), // Seek input file
-      "-i", this.inputPath, // Input file
-      ...(typeof durationSeconds === "undefined" ? [] : ["-t", durationSeconds.toString()]), // Duration of chunk
-      "-c", "copy", // Do not re-encode
+
+    // TODO: Vid without audio
+    var videoStream: Stream;
+    if (videoStreamId === undefined) {
+      videoStream = this.inputMetadata.videoStreams[0];
+    } else {
+      var videoStreams = this.inputMetadata.videoStreams.filter(s => s.id == videoStreamId);
+      // assert(videoStream.length <= 1);
+      if (videoStreams.length == 0) {
+        throw Error(`No video stream found with id ${videoStreamId}`);
+      }
+      videoStream = videoStreams[0];
+    }
+    const videoStreamContainer = ffmpegFormatToCompatibleContainer(videoStream.formatDescription);
+
+    var audioStream: Stream;
+    if (audioStreamId === undefined) {
+      audioStream = this.inputMetadata.audioStreams[0];
+    } else {
+      var audioStreams = this.inputMetadata.audioStreams.filter(s => s.id == audioStreamId);
+      // assert(audioStream.length <= 1);
+      if (audioStreams.length == 0) {
+        throw Error(`No audio stream found with id ${audioStreamId}`);
+      }
+      audioStream = audioStreams[0];
+    }
+    const audioStreamContainer = ffmpegFormatToCompatibleContainer(audioStream.formatDescription);
+
+    const videoArgs = [
+      "-map", videoStream.id,
+      "-f", videoStreamContainer.ffmpegFormat,
+      "-vcodec", "copy",
+      // "-map_chapters", "-1", // Don't copy chapters metadata, which can cause problems with MIME type containing 'text' codec
       /*
        * Fragment MP4 files, required for MSE (frag_keyframe, empty_moov)
        * Avoid 'TFHD base-data-offset not allowed by MSE.' error for Chrome (default_base_moof)
        */
       "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      "-an", // Remove audio
-      "-sn",
-      "-map_chapters", "-1", // Don't copy chapters metadata, which can cause problems with MIME type containing 'text' codec
-      this.outputPath
+      `${this.outputDir}/video`,
+    ];
+
+    const audioArgs = [
+      "-map", audioStream.id,
+      "-strict", "-2", // Experimental flac in mp4 support
+      "-f", audioStreamContainer.ffmpegFormat,
+      "-acodec", "copy",
+      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+      `${this.outputDir}/audio`
+    ];
+
+    var args = [
+      "-ss", seekOffsetSeconds.toString(), // Seek input file
+      ...(typeof durationSeconds === "undefined" ? [] : ["-t", durationSeconds.toString()]), // Duration of chunk
+      "-i", this.inputPath, // Input file
+      ...audioArgs,
+      ...videoArgs,
     ];
     this.runFFmpeg(...args);
     const FS = this.ffmpegCore.FS;
-    const blob: Uint8Array = FS.readFile(this.outputPath);
-    return blob;
+
+    const videoChunk: RemuxedChunkStream = {
+      data: FS.readFile(`${this.outputDir}/video`),
+      mime: videoStreamContainer.mime
+    };
+    const audioChunk: RemuxedChunkStream = {
+      data: FS.readFile(`${this.outputDir}/audio`),
+      mime: audioStreamContainer.mime
+    };
+
+    return {
+      audioChunk,
+      videoChunk
+    };
   }
 
   private runFFmpeg(...args: string[]) {
@@ -179,7 +314,7 @@ export default class FFmpeg {
     console.log("Running ffmpeg", args)
     this.ffmpegState = FFmpegState.Busy;
     try {
-      this.ffmpegMain(...parse_args(this.ffmpegCore, this.defaultArgs.concat(args)));
+      this.ffmpegMain(...parse_args(this.ffmpegCore, FFmpeg.defaultArgs.concat(args)));
     } catch (e) {console.error("Exception caught from entrypoint: ", e)}
     //this.ffmpegCore._emscripten_proxy_main(...parse_args(this.ffmpegCore, this.defaultArgs.concat(args)));
   }
