@@ -3,17 +3,6 @@ import type { Remote } from 'comlink';
 import type { FFmpeg, MediaMetadata } from './worker/ffmpeg'
 // import * as MP4Box from 'mp4box';
 
-function waita(): Promise<void> {
-  return new Promise((resolve, _) => {
-    setTimeout(resolve, 5000);
-  });
-}
-
-async function lol() {
-  alert(1);
-  await waita();
-}
-
 const downloadURL = (data, fileName) => {
   const a = document.createElement('a')
   a.href = data
@@ -64,7 +53,7 @@ class SuperVideoElement {
     if (!(await this.ffmpegWorker.isLoaded())) {
       await this.ffmpegWorker.load();
     }
-    await this.ffmpegWorker.setInputFile(filePicker.files[0]);
+    await this.ffmpegWorker.setInputFile(file);
     this.loadedMediaMetadata = await this.ffmpegWorker.getMetadata();
     this.mediaSource.duration = this.loadedMediaMetadata.durationSeconds;
     this.videoElement.addEventListener("timeupdate", () => this.onTimeUpdate());
@@ -118,10 +107,10 @@ class SuperVideoElement {
     const remuxedChunk = await this.ffmpegWorker.remuxChunk(start, len, this.loadedMediaMetadata.videoStreams[0]?.id, this.loadedMediaMetadata.audioStreams[0]?.id);
 
     // TODO: laodChunk for updating buffers, not ready
-    if (this.audioSourceBuffer === undefined && remuxedChunk.audioChunk !== undefined) {
+    if (this.audioSourceBuffer === undefined && remuxedChunk.audioChunk != null) {
       this.audioSourceBuffer = this.mediaSource.addSourceBuffer(remuxedChunk.audioChunk.mime);
     }
-    if (this.videoSourceBuffer === undefined && remuxedChunk.videoChunk !== undefined) {
+    if (this.videoSourceBuffer === undefined && remuxedChunk.videoChunk != null) {
       this.videoSourceBuffer = this.mediaSource.addSourceBuffer(remuxedChunk.videoChunk.mime);
     }
     let updating = 0;
