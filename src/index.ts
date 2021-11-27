@@ -1,49 +1,17 @@
 import spawnFFmpegWorker from './chunked-remuxer';
-import * as MP4Box from 'mp4box';
+import type { Remote } from 'comlink';
+import type { FFmpeg, MediaMetadata } from './worker/ffmpeg'
+// import * as MP4Box from 'mp4box';
 
-const filePicker = document.getElementById("file") as HTMLInputElement;
-const video = document.getElementById("video") as HTMLVideoElement;
-
-if (!window.MediaSource) {
-  const err = "Media Source Extensions are not supported by this browser.";
-  alert(err);
-  throw new Error(err);
-}
-
-const mediaSource = new MediaSource();
-video.src = URL.createObjectURL(mediaSource);
-mediaSource.addEventListener('sourceopen', () => {
-  URL.revokeObjectURL(video.src);
-}, { once: true });
-
-async function waitOpenState(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (mediaSource.readyState === "open") {
-      resolve();
-    } else {
-      mediaSource.addEventListener("sourceopen", () => {
-        resolve();
-      }, { once: true });
-    }
+function waita(): Promise<void> {
+  return new Promise((resolve, _) => {
+    setTimeout(resolve, 5000);
   });
 }
 
-async function getMP4Mime(array: Uint8Array): Promise<string> {
-  const buffer = array.buffer.slice(array.byteOffset, array.byteLength + array.byteOffset);
-  return new Promise((resolve, reject) => {
-    const mp4boxfile = MP4Box.createFile();
-    mp4boxfile.onReady = (info) => {
-      console.log(info);
-      resolve(info.mime);
-    }
-    mp4boxfile.onError = (error) => {
-      reject(error);
-    };
-    // @ts-ignore
-    buffer.fileStart = 0;
-    mp4boxfile.appendBuffer(buffer);
-    mp4boxfile.flush();
-  });
+async function lol() {
+  alert(1);
+  await waita();
 }
 
 const downloadURL = (data, fileName) => {
@@ -65,45 +33,140 @@ const downloadBlob = (data, fileName, mimeType) => {
   setTimeout(() => window.URL.revokeObjectURL(url), 1000)
 }
 
-async function loadMedia() {
+class SuperVideoElement {
+  videoElement: HTMLVideoElement;
+  mediaSource: MediaSource;
+  ffmpegWorker: Remote<FFmpeg>;
+  loadedMediaMetadata: MediaMetadata;
+
+  audioSourceBuffer: SourceBuffer;
+  videoSourceBuffer: SourceBuffer;
+
+  updatingTime: number;
+
+  constructor(video: HTMLVideoElement) {
+    if (!window.MediaSource) {
+      const err = "Media Source Extensions are not supported by this browser.";
+      alert(err);
+      throw new Error(err);
+    }
+
+    this.videoElement = video;
+    this.mediaSource = new MediaSource();
+    this.videoElement.src = URL.createObjectURL(this.mediaSource);
+    this.mediaSource.addEventListener('sourceopen', () => {
+      URL.revokeObjectURL(video.src);
+    }, { once: true });
+    this.ffmpegWorker = spawnFFmpegWorker();
+  }
+
+  async loadMedia(file: File) {
+    if (!(await this.ffmpegWorker.isLoaded())) {
+      await this.ffmpegWorker.load();
+    }
+    await this.ffmpegWorker.setInputFile(filePicker.files[0]);
+    this.loadedMediaMetadata = await this.ffmpegWorker.getMetadata();
+    this.mediaSource.duration = this.loadedMediaMetadata.durationSeconds;
+    this.videoElement.addEventListener("timeupdate", () => this.onTimeUpdate());
+    this.onTimeUpdate();
+  }
+
+  private async onTimeUpdate() {
+    console.log("Time update")
+    const time = this.videoElement.currentTime;
+
+    const getFirstUnbuffered = () => {
+      const buffers = this.mediaSource.sourceBuffers;
+      let res = undefined;
+
+      for (let i = 0; i < buffers.length; i++) {
+        let intersectingRangeEnd = undefined;
+        const bufferedRanges = buffers[i].buffered;
+        for (let j = 0; j < bufferedRanges.length; j++) {
+          const start = bufferedRanges.start(j);
+          const end = bufferedRanges.end(j);
+          if (start <= time && time <= end) {
+            intersectingRangeEnd = end;
+            break;
+          }
+        }
+        if (intersectingRangeEnd === undefined) {
+          return time;
+        } else if (res === undefined)  {
+          res = intersectingRangeEnd;
+        } else {
+          res = Math.min(res, intersectingRangeEnd);
+        }
+      }
+      return res || time;
+    }
+
+    const nextChunkTime = getFirstUnbuffered();
+    console.log("next chunk time", nextChunkTime);
+    if (nextChunkTime - time < 5.0) {
+      await this.loadChunk(nextChunkTime, 10.0);
+    }
+    console.log("Time update end")
+  }
+
+  private async loadChunk(start: number, len: number) {
+    if (this.updatingTime === start) {
+      console.log("Ignoring loadChunk that has already been requested");
+      return;
+    }
+    this.updatingTime = start;
+    const remuxedChunk = await this.ffmpegWorker.remuxChunk(start, len, this.loadedMediaMetadata.videoStreams[0]?.id, this.loadedMediaMetadata.audioStreams[0]?.id);
+
+    // TODO: laodChunk for updating buffers, not ready
+    if (this.audioSourceBuffer === undefined && remuxedChunk.audioChunk !== undefined) {
+      this.audioSourceBuffer = this.mediaSource.addSourceBuffer(remuxedChunk.audioChunk.mime);
+    }
+    if (this.videoSourceBuffer === undefined && remuxedChunk.videoChunk !== undefined) {
+      this.videoSourceBuffer = this.mediaSource.addSourceBuffer(remuxedChunk.videoChunk.mime);
+    }
+    let updating = 0;
+    const cb = () => {
+      if (--updating == 0) {
+        this.updatingTime = undefined;
+      }
+    }
+    if (remuxedChunk.audioChunk) {
+      updating++;
+      //this.audioSourceBuffer.timestampOffset = start;
+      this.audioSourceBuffer.appendBuffer(remuxedChunk.audioChunk.data);
+      this.audioSourceBuffer.addEventListener("updateend", cb, { once: true });
+    }
+    if (remuxedChunk.videoChunk) {
+      updating++;
+      //this.videoSourceBuffer.timestampOffset = start;
+      //downloadBlob(remuxedChunk.videoChunk.data, "remuxed", "video/mp4");
+      this.videoSourceBuffer.appendBuffer(remuxedChunk.videoChunk.data);
+      this.videoSourceBuffer.addEventListener("updateend", cb, { once: true });
+    }
+  }
+
+  private async waitOpenState(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (this.mediaSource.readyState === "open") {
+        resolve();
+      } else if (this.mediaSource.readyState == "closed") {
+        this.mediaSource.addEventListener("sourceopen", () => {
+          resolve();
+        }, { once: true });
+      } else {
+        reject(`Unexpected MediaSource readyState when asked to wait for open state: ${this.mediaSource.readyState}`);
+      }
+    });
+  }
+}
+
+const filePicker = document.getElementById("file") as HTMLInputElement;
+const video = document.getElementById("video") as HTMLVideoElement;
+const superVideoElement = new SuperVideoElement(video);
+
+function loadMedia() {
   if (filePicker.files && filePicker.files[0]) {
-    const ffmpeg = spawnFFmpegWorker();
-    await ffmpeg.load();
-    await ffmpeg.setInputFile(filePicker.files[0]);
-    const meta = await ffmpeg.getMetadata();
-    const duration = meta.durationSeconds;
-
-    await waitOpenState();
-    mediaSource.duration = duration;
-    const remuxedChunk = await ffmpeg.remuxChunk(0.0, 30.0);
-    // https://developer.mozilla.org/en-US/docs/Web/Media/Formats/codecs_parameter
-    // Just add something that can be played by Firefox, since the type check is too conservative
-
-    const videoBuffer = mediaSource.addSourceBuffer(remuxedChunk.videoChunk.mime);
-    const audioBuffer = mediaSource.addSourceBuffer(remuxedChunk.audioChunk.mime);
-
-    const addChunk = (sourceBuffer: SourceBuffer, data: Uint8Array) => {
-      sourceBuffer.appendBuffer(data);
-      sourceBuffer.onupdatestart = () => {
-        console.log("UPDATESTART");
-      };
-      sourceBuffer.onupdateend = () => {
-        console.log("UPDATEEND");
-      }
-      sourceBuffer.onerror = e => {
-        console.log("ERR", e);
-      }
-    };
-
-    downloadBlob(remuxedChunk.audioChunk.data, "audio", remuxedChunk.audioChunk.mime);
-    downloadBlob(remuxedChunk.videoChunk.data, "video", remuxedChunk.videoChunk.mime);
-    addChunk(audioBuffer, remuxedChunk.audioChunk.data);
-    addChunk(videoBuffer, remuxedChunk.videoChunk.data);
-
-    video.oncanplay = () => {
-      console.log("CANPLAY");
-      video.play();
-    };
+    superVideoElement.loadMedia(filePicker.files[0]);
   }
 }
 

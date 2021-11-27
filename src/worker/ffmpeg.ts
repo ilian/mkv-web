@@ -42,7 +42,7 @@ export interface RemuxedChunkStream {
   mime: string
 }
 
-interface RemuxedChunk {
+export interface RemuxedChunk {
   videoChunk: RemuxedChunkStream,
   audioChunk: RemuxedChunkStream
 }
@@ -72,7 +72,7 @@ function ffmpegFormatToCompatibleContainer(format: string): ContainerType {
   throw new Error("Unsupported ffmpeg format description: " + format);
 }
 
-export default class FFmpeg {
+export class FFmpeg {
   static defaultArgs = [
     "ffmpeg",
     "-hide_banner", // Hide copyright notice, build options and library versions
@@ -104,6 +104,10 @@ export default class FFmpeg {
     if (typeof this.inputPath === "undefined") {
       throw new Error("No file set as input with setInputFile");
     }
+  }
+
+  isLoaded(): boolean {
+    return !(this.ffmpegState == FFmpegState.Uninitialized);
   }
 
   async load() {
@@ -176,7 +180,6 @@ export default class FFmpeg {
       )
     );
     this.runFFmpeg("-i", this.inputPath);
-    this.runFFmpeg("-formats");
     const logEntries = await logEntriesPromise;
 
     this.inputMetadata = {
@@ -218,77 +221,85 @@ export default class FFmpeg {
     return this.inputMetadata;
   }
 
-  async remuxChunk(seekOffsetSeconds = 0.0, durationSeconds?: number, videoStreamId?: string, audioStreamId?: string): Promise<RemuxedChunk> {
+  async remuxChunk(seekOffsetSeconds = 0.0, durationSeconds: number, videoStreamId: string, audioStreamId: string): Promise<RemuxedChunk> {
     this.assertInput();
     // TODO: Get video codec and check if supported by browser and mp4 container
 
-    // TODO: Vid without audio
-    var videoStream: Stream;
-    if (videoStreamId === undefined) {
-      videoStream = this.inputMetadata.videoStreams[0];
-    } else {
-      var videoStreams = this.inputMetadata.videoStreams.filter(s => s.id == videoStreamId);
-      // assert(videoStream.length <= 1);
-      if (videoStreams.length == 0) {
-        throw Error(`No video stream found with id ${videoStreamId}`);
-      }
-      videoStream = videoStreams[0];
+    const videoStreams = this.inputMetadata.videoStreams.filter(s => s.id == videoStreamId);
+    // assert(videoStream.length <= 1);
+    if (videoStreams.length == 0) {
+      throw Error(`No video stream found with id ${videoStreamId}`);
     }
+    const videoStream: Stream = videoStreams[0];
     const videoStreamContainer = ffmpegFormatToCompatibleContainer(videoStream.formatDescription);
 
     var audioStream: Stream;
-    if (audioStreamId === undefined) {
-      audioStream = this.inputMetadata.audioStreams[0];
-    } else {
+    var audioStreamContainer: ContainerType;
+    if (audioStreamId != null) {
       var audioStreams = this.inputMetadata.audioStreams.filter(s => s.id == audioStreamId);
       // assert(audioStream.length <= 1);
       if (audioStreams.length == 0) {
         throw Error(`No audio stream found with id ${audioStreamId}`);
       }
       audioStream = audioStreams[0];
+      audioStreamContainer = ffmpegFormatToCompatibleContainer(audioStream.formatDescription);
     }
-    const audioStreamContainer = ffmpegFormatToCompatibleContainer(audioStream.formatDescription);
 
-    const videoArgs = [
-      "-map", videoStream.id,
-      "-f", videoStreamContainer.ffmpegFormat,
-      "-vcodec", "copy",
-      // "-map_chapters", "-1", // Don't copy chapters metadata, which can cause problems with MIME type containing 'text' codec
-      /*
-       * Fragment MP4 files, required for MSE (frag_keyframe, empty_moov)
-       * Avoid 'TFHD base-data-offset not allowed by MSE.' error for Chrome (default_base_moof)
-       */
-      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      `${this.outputDir}/video`,
-    ];
-
-    const audioArgs = [
-      "-map", audioStream.id,
-      "-strict", "-2", // Experimental flac in mp4 support
-      "-f", audioStreamContainer.ffmpegFormat,
-      "-acodec", "copy",
-      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-      `${this.outputDir}/audio`
-    ];
-
-    var args = [
+    let args = [
       "-ss", seekOffsetSeconds.toString(), // Seek input file
       ...(typeof durationSeconds === "undefined" ? [] : ["-t", durationSeconds.toString()]), // Duration of chunk
+      "-copyts",
       "-i", this.inputPath, // Input file
-      ...audioArgs,
-      ...videoArgs,
     ];
+
+    if (videoStreamContainer) {
+      args = args.concat([
+        "-map", videoStream.id,
+        "-f", videoStreamContainer.ffmpegFormat,
+        "-vcodec", "copy",
+        // "-map_chapters", "-1", // Don't copy chapters metadata, which can cause problems with MIME type containing 'text' codec
+        /*
+         * Fragment MP4 files, required for MSE (frag_keyframe, empty_moov)
+         * Avoid 'TFHD base-data-offset not allowed by MSE.' error for Chrome (default_base_moof)
+         "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+         */
+        "-movflags", "frag_keyframe+delay_moov+default_base_moof",
+        `${this.outputDir}/video`,
+      ]);
+    }
+
+    if (audioStreamContainer) {
+      args = args.concat([
+        "-map", audioStream.id,
+        "-strict", "-2", // Experimental flac in mp4 support
+        "-f", audioStreamContainer.ffmpegFormat,
+        "-acodec", "copy",
+        "-movflags", "frag_keyframe+delay_moov+default_base_moof",
+        `${this.outputDir}/audio`
+      ])
+    }
+
     this.runFFmpeg(...args);
     const FS = this.ffmpegCore.FS;
 
-    const videoChunk: RemuxedChunkStream = {
-      data: FS.readFile(`${this.outputDir}/video`),
-      mime: videoStreamContainer.mime
-    };
-    const audioChunk: RemuxedChunkStream = {
-      data: FS.readFile(`${this.outputDir}/audio`),
-      mime: audioStreamContainer.mime
-    };
+    let videoChunk: RemuxedChunkStream = null;
+    let audioChunk: RemuxedChunkStream = null;
+
+    if (videoStreamContainer) {
+      videoChunk = {
+        data: FS.readFile(`${this.outputDir}/video`),
+        mime: videoStreamContainer.mime
+      };
+      FS.unlink(`${this.outputDir}/video`);
+    }
+
+    if (audioStreamContainer) {
+      audioChunk = {
+        data: FS.readFile(`${this.outputDir}/audio`),
+        mime: audioStreamContainer.mime
+      };
+      FS.unlink(`${this.outputDir}/audio`);
+    }
 
     return {
       audioChunk,
@@ -319,3 +330,5 @@ export default class FFmpeg {
     //this.ffmpegCore._emscripten_proxy_main(...parse_args(this.ffmpegCore, this.defaultArgs.concat(args)));
   }
 }
+
+export default FFmpeg;
