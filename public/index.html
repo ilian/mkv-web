@@ -3,10 +3,27 @@
     <meta charset="UTF-8">
     <title>ilian/mkv-web</title>
   </head>
+  <style>
+    video {
+      height: 80vh;
+    }
+    #logs {
+      height: 13vh;
+      overflow: auto;
+    }
+    #logs > p {
+      font-family: monospace;
+      margin: 0.5mm;
+    }
+  </style>
   <body>
     <div id="root">
       <video controls id="video"></video>
+      <br>
       <input type="file" accept="video/x-matroska,.mkv" id="file">
+      <button id="playfile">Play file</button>
+      <button id="sample">Play sample MKV from the web</button>
+      <div id="logs"></div>
     </div>
     <script src="dist/bundle.js"></script>
   </body>

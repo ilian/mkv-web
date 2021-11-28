@@ -34,6 +34,8 @@ module.exports = {
   },
   devtool: "source-map",
   devServer: {
+    hot: false,
+    liveReload: false,
     // Allow use of SharedArrayBuffer, needed by emscripten threads
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',

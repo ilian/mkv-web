@@ -67,7 +67,12 @@ function ffmpegFormatToCompatibleContainer(format: string): ContainerType {
     return {
       ffmpegFormat: "mp4",
       mime: 'audio/mp4; codecs="mp4a.40.2"' // AAC-LC
-    }
+    };
+  } else if (format.startsWith("opus")) {
+    return {
+      ffmpegFormat: "webm",
+      mime: 'audio/webm; codecs="opus"'
+    };
   }
   throw new Error("Unsupported ffmpeg format description: " + format);
 }
