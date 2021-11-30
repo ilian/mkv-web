@@ -58,6 +58,11 @@ function ffmpegFormatToCompatibleContainer(format: string): ContainerType {
       ffmpegFormat: "mp4",
       mime: 'audio/mp4; codecs="flac"'
     };
+  } else if (format.startsWith("mp3")) {
+    return {
+      ffmpegFormat: "mp4",
+      mime: 'audio/mp4; codecs="mp3"'
+    };
   } else if (format.startsWith("vorbis")) {
     return {
       ffmpegFormat: "webm",
