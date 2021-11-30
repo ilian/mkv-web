@@ -16,8 +16,8 @@ playFileButton.addEventListener("click",  () => {
 
 const sampleButton = document.getElementById("sample") as HTMLButtonElement;
 sampleButton.addEventListener("click", async () => {
-  log("Downloading demo.mkv");
-  const blob = await (await fetch("demo.mkv")).blob();
+  log("Downloading sample MKV file");
+  const blob = await (await fetch("https://de.catbox.moe/ol3g57.mkv")).blob();
   mkvWeb.loadMedia(new File([await blob.arrayBuffer()], "demo.mkv"));
 }, {once: true});
 
