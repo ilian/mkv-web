@@ -8,7 +8,7 @@
   },
   "repository": "git@github.com:ilian/mkv-web.git",
   "author": "ilian <ilian@tuta.io>",
-  "license": "MIT",
+  "license": "GPLv3",
   "devDependencies": {
     "copy-webpack-plugin": "^9.0.1",
     "path-browserify": "^1.0.1",
